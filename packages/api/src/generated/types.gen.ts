@@ -3440,6 +3440,34 @@ export type ListPublicTask = {
     next_cursor: string | null;
 };
 
+export type ListPublicView = {
+    items: Array<{
+        /**
+         * `#rrggbb`.
+         */
+        color: string | null;
+        description: string;
+        /**
+         * The view's place in the creator's favorites; `null` when not a favorite.
+         */
+        favorite_position: number | null;
+        icon: string | null;
+        id: string;
+        /**
+         * Whether the token's creator has favorited this view.
+         */
+        is_favorite: boolean;
+        name: string;
+        updated_at: string;
+        version: number;
+        visibility: Visibility;
+    }>;
+    /**
+     * Send it as `cursor` for the next page; `null` on the last page.
+     */
+    next_cursor: string | null;
+};
+
 export type ListTaskRelationRecord = {
     items: Array<{
         created_at: string;
@@ -6802,7 +6830,8 @@ export type PublicMe = {
     user: null | PublicUser;
     workspace: PublicNamed;
     /**
-     * Every workspace the token may use, with its access there. Always one item today.
+     * Every workspace the token may use, with its access there. An API token has one; an OAuth
+     * connection can have several.
      */
     workspaces: Array<PublicWorkspaceGrant>;
 };
@@ -7239,6 +7268,31 @@ export type PublicUser = {
     display_name: string;
     email: string;
     id: string;
+};
+
+/**
+ * A saved task view. Its filter stays in Orbit: list its tasks with `GET /tasks?view_id=`.
+ */
+export type PublicView = {
+    /**
+     * `#rrggbb`.
+     */
+    color: string | null;
+    description: string;
+    /**
+     * The view's place in the creator's favorites; `null` when not a favorite.
+     */
+    favorite_position: number | null;
+    icon: string | null;
+    id: string;
+    /**
+     * Whether the token's creator has favorited this view.
+     */
+    is_favorite: boolean;
+    name: string;
+    updated_at: string;
+    version: number;
+    visibility: Visibility;
 };
 
 export type PublicWorkspaceExportArchive = Blob | File;
@@ -12413,6 +12467,11 @@ export type PublicListTasksData = {
          */
         parent_task_id?: string;
         /**
+         * Only the tasks of this saved view (from `GET /views`), with its completed-task and
+         * sub-issue rules. Without `sort`, the view's order applies.
+         */
+        view_id?: string;
+        /**
          * Text in the title or description, or a task identifier; up to 500 characters.
          */
         q?: string;
@@ -13203,6 +13262,74 @@ export type PublicDeleteRelationResponses = {
 };
 
 export type PublicDeleteRelationResponse = PublicDeleteRelationResponses[keyof PublicDeleteRelationResponses];
+
+export type PublicListViewsData = {
+    body?: never;
+    headers?: {
+        /**
+         * Frontend contract identifier. Unsupported values return contract_mismatch; current value: orbit-api-v1.
+         */
+        'X-Orbit-Contract'?: string;
+    };
+    path: {
+        /**
+         * The token's workspace, from `GET /me`.
+         */
+        workspace_id: string;
+    };
+    query?: never;
+    url: '/api/public/v1/workspaces/{workspace_id}/views';
+};
+
+export type PublicListViewsErrors = {
+    /**
+     * invalid_proxy_headers
+     */
+    400: Problem;
+    /**
+     * unauthorized
+     */
+    401: Problem;
+    /**
+     * insufficient_scope
+     */
+    403: Problem;
+    /**
+     * not_found
+     */
+    404: Problem;
+    /**
+     * contract_mismatch
+     */
+    409: Problem;
+    /**
+     * request_too_large
+     */
+    413: Problem;
+    /**
+     * rate_limit_exceeded
+     */
+    429: Problem;
+    /**
+     * internal_error
+     */
+    500: Problem;
+    /**
+     * internal_error or another documented stable code
+     */
+    default: Problem;
+};
+
+export type PublicListViewsError = PublicListViewsErrors[keyof PublicListViewsErrors];
+
+export type PublicListViewsResponses = {
+    /**
+     * Every view; `next_cursor` is `null`
+     */
+    200: ListPublicView;
+};
+
+export type PublicListViewsResponse = PublicListViewsResponses[keyof PublicListViewsResponses];
 
 export type StartImageCompressionData = {
     body?: never;

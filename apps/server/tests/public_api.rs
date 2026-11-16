@@ -12,6 +12,7 @@ use orbit_server::repositories::api_tokens::{ApiTokenError, ApiTokenRepository, 
 use orbit_server::repositories::identity::{IdentityRepository, SetupRequest};
 use orbit_server::repositories::pages::{CreatePage, PageChanges, PageRepository, SpaceRequest};
 use orbit_server::repositories::tasks::{CreateTask, TaskRepository};
+use orbit_server::repositories::views::{ViewCreate, ViewRepository, Visibility};
 use serde_json::{Value, json};
 use tower::ServiceExt;
 
@@ -1731,6 +1732,161 @@ async fn tasks_filter_by_due_date() {
             .await;
         assert_eq!(code, StatusCode::BAD_REQUEST, "{bad}");
     }
+}
+
+/// Saves a view whose filter has one condition, ordered by title.
+async fn save_view(
+    f: &Fixture,
+    owner: Id,
+    name: &str,
+    visibility: Visibility,
+    condition: Value,
+) -> String {
+    let state = serde_json::from_value(json!({
+        "filter": {"op": "and", "children": [condition]},
+        "display": {
+            "layout": "list",
+            "group_by": "status",
+            "sub_group_by": "none",
+            "order_by": "title",
+            "order_direction": "asc",
+            "properties": ["id", "status"],
+            "show_completed": "all",
+            "show_empty_groups": false,
+            "sub_issues": "nested"
+        }
+    }))
+    .unwrap();
+    let input = ViewCreate {
+        name: name.into(),
+        description: String::new(),
+        icon: None,
+        color: None,
+        visibility,
+        state,
+    };
+    ViewRepository::new((*f.database).clone())
+        .create_view(f.workspace, owner, input, "test")
+        .await
+        .unwrap()
+        .id
+        .to_string()
+}
+
+#[tokio::test]
+async fn saved_views_list_and_filter_tasks_for_personal_tokens() {
+    let f = Fixture::new().await;
+    let (token, _) = f.token(&[ApiTokenScope::TasksWrite], false).await;
+    let status = f.first_status(f.project).await;
+    for (title, priority, assignees) in [
+        ("Beta", "high", json!([f.user])),
+        ("Alpha", "high", json!([])),
+        ("Gamma", "low", json!([f.user])),
+    ] {
+        let (code, task) = f
+            .call(
+                Some(&token),
+                "POST",
+                "/tasks",
+                Some(json!({"project_id": f.project, "status_id": status, "title": title, "priority": priority, "assignee_ids": assignees})),
+            )
+            .await;
+        assert_eq!(code, StatusCode::CREATED, "{task}");
+    }
+    let high = save_view(
+        &f,
+        f.user,
+        "High",
+        Visibility::Workspace,
+        json!({"field": "priority", "operator": "is", "value": ["high"]}),
+    )
+    .await;
+    let mine = save_view(
+        &f,
+        f.user,
+        "Mine",
+        Visibility::Personal,
+        json!({"field": "assignee", "operator": "is", "value": ["me"]}),
+    )
+    .await;
+    let member = add_member(&f, "member@example.com", "member").await;
+    let hidden = save_view(
+        &f,
+        member,
+        "Theirs",
+        Visibility::Personal,
+        json!({"field": "priority", "operator": "is", "value": ["low"]}),
+    )
+    .await;
+
+    // The creator's views and the workspace views, by name; another member's personal view is not.
+    let (code, list) = f.call(Some(&token), "GET", "/views", None).await;
+    assert_eq!(code, StatusCode::OK, "{list}");
+    let names: Vec<&str> = list["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(names, ["High", "Mine"]);
+    assert_eq!(list["next_cursor"], Value::Null);
+    assert_eq!(list["items"][0]["id"], high);
+    assert_eq!(list["items"][0]["visibility"], "workspace");
+    assert!(
+        list["items"][0].get("state").is_none(),
+        "the filter stays in Orbit"
+    );
+
+    let titles = |page: &Value| {
+        page["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|t| t["title"].as_str().unwrap().to_owned())
+            .collect::<Vec<_>>()
+    };
+    // The view's filter and order (title, ascending); `me` is the token's creator.
+    for (query, expected) in [
+        (format!("view_id={high}"), vec!["Alpha", "Beta"]),
+        (format!("view_id={mine}"), vec!["Beta", "Gamma"]),
+        (
+            format!("view_id={high}&sort=title&order=desc"),
+            vec!["Beta", "Alpha"],
+        ),
+        (format!("view_id={high}&q=Alpha"), vec!["Alpha"]),
+    ] {
+        let (code, page) = f
+            .call(Some(&token), "GET", &format!("/tasks?{query}"), None)
+            .await;
+        assert_eq!(code, StatusCode::OK, "{query}: {page}");
+        assert_eq!(titles(&page), expected, "{query}");
+    }
+
+    // A view the creator cannot see, an unknown view and a malformed ID.
+    for (query, expected) in [
+        (format!("view_id={hidden}"), StatusCode::NOT_FOUND),
+        (format!("view_id={}", Id::new_v7()), StatusCode::NOT_FOUND),
+        ("view_id=nope".to_owned(), StatusCode::BAD_REQUEST),
+    ] {
+        let (code, _) = f
+            .call(Some(&token), "GET", &format!("/tasks?{query}"), None)
+            .await;
+        assert_eq!(code, expected, "{query}");
+    }
+
+    // Views belong to a person: a service-account token gets neither the list nor a view's tasks.
+    let (service, _) = f.token(&[ApiTokenScope::TasksRead], true).await;
+    let (code, _) = f.call(Some(&service), "GET", "/views", None).await;
+    assert_eq!(code, StatusCode::NOT_FOUND);
+    let (code, _) = f
+        .call(
+            Some(&service),
+            "GET",
+            &format!("/tasks?view_id={high}"),
+            None,
+        )
+        .await;
+    assert_eq!(code, StatusCode::NOT_FOUND);
 }
 
 #[tokio::test]

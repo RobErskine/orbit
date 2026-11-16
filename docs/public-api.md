@@ -72,7 +72,7 @@ scopes, which MCP does not use.
 
 | Scope | Access in **Settings → API tokens** | Public API endpoints |
 | --- | --- | --- |
-| `tasks:read` | Tasks: **Read** | `GET` projects, statuses, labels, members, tasks and comments |
+| `tasks:read` | Tasks: **Read** | `GET` projects, statuses, labels, members, saved views, tasks and comments |
 | `tasks:write` | Tasks: **Write** | Create, update and delete tasks, add comments, link tasks, create and change projects, statuses and labels, `POST /integrations/discord/events` |
 | `tasks:import` | Tasks: **Write** with **Import mode** | With `tasks:write`: the import fields of new tasks and comments. See [Import from another tool](#import-from-another-tool). |
 | `docs:read` | Docs: **Read** | `GET /docs`, `GET /docs/{page_id}`, `GET /docs/{page_id}/versions`, `GET /docs/{page_id}/versions/{version_id}`, `GET /docs/{page_id}/database`, `POST /docs/{page_id}/database/query`, `GET /docs/{page_id}/database/views` and `…/views/{view_id}` |
@@ -263,6 +263,28 @@ API does not show email addresses or roles.
 curl -sS "$ORBIT_WS/members" -H "Authorization: Bearer $ORBIT_TOKEN"
 ```
 
+### Saved views
+
+`GET /workspaces/{workspace_id}/views`. Scope: `tasks:read`. The saved task views
+that the token's creator sees in Orbit (**Tasks → Views**): their personal views
+and the workspace views, by name. Item: `{id, name, description, icon, color,
+visibility, is_favorite, favorite_position, version, updated_at}`. `visibility` is
+`personal` or `workspace`. `next_cursor` is always `null`. Views belong to a
+person, so a service-account token gets `404`, as for docs.
+
+The view's filter stays in Orbit. To list its tasks, send its ID as `view_id` to
+`GET /tasks`: Orbit applies the view's filter and its completed-task and
+sub-issue rules, and the view's order unless you send `sort`. `me` in the filter
+is the token's creator. The other parameters narrow the result further, and
+the tasks stay in the approved projects. A view that the token's creator cannot
+see gives `404`.
+
+```bash
+curl -sS "$ORBIT_WS/views" -H "Authorization: Bearer $ORBIT_TOKEN"
+curl -sS -G "$ORBIT_WS/tasks" -H "Authorization: Bearer $ORBIT_TOKEN" \
+  --data-urlencode "view_id=$VIEW_ID"
+```
+
 ### Tasks
 
 A task:
@@ -303,7 +325,8 @@ cycle ID; `current`, `next` or `previous` for that cycle of each task's project;
 `2026-11-12`, which means 00:00 UTC, or a UTC time such as `2026-11-12T15:00:00Z`; both bounds are
 exclusive, and tasks without a due date never match), `has_due_date` (`true` or `false`),
 `parent_task_id` (only the direct sub-issues
-of this task, as a UUID or an identifier such as `ENG-12`; the task must be in an approved project), `q` (text in the title or description, or an
+of this task, as a UUID or an identifier such as `ENG-12`; the task must be in an approved project),
+`view_id` (only the tasks of a [saved view](#saved-views)), `q` (text in the title or description, or an
 identifier), `sort` (`created_at`, `updated_at`, `priority`, `due_date`,
 `title` or `estimate`; default `created_at`; tasks without an estimate come last), `order` (`desc` or `asc`; default `desc`; with
 `sort=priority`, `desc` gives `urgent` first and `none` last),

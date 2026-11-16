@@ -6775,6 +6775,15 @@
             }
           },
           {
+            "name": "view_id",
+            "in": "query",
+            "description": "Only the tasks of this saved view (from `GET /views`), with its completed-task and\nsub-issue rules. Without `sort`, the view's order applies.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
             "name": "q",
             "in": "query",
             "description": "Text in the title or description, or a task identifier; up to 500 characters.",
@@ -8341,6 +8350,143 @@
         "responses": {
           "204": {
             "description": "The relation is removed"
+          },
+          "400": {
+            "description": "invalid_proxy_headers",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "unauthorized",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "insufficient_scope",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "not_found",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "contract_mismatch",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "request_too_large",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "rate_limit_exceeded",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "internal_error",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "internal_error or another documented stable code",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/public/v1/workspaces/{workspace_id}/views": {
+      "get": {
+        "tags": [
+          "public-api"
+        ],
+        "summary": "The saved task views of the token's creator",
+        "description": "The views the token's creator sees in Orbit: their personal views and the workspace views, by name. A service-account token gets `404`. List a view's tasks with `GET /tasks?view_id=`.",
+        "operationId": "public_list_views",
+        "parameters": [
+          {
+            "name": "workspace_id",
+            "in": "path",
+            "description": "The token's workspace, from `GET /me`.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "X-Orbit-Contract",
+            "in": "header",
+            "description": "Frontend contract identifier. Unsupported values return contract_mismatch; current value: orbit-api-v1.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Every view; `next_cursor` is `null`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/List_PublicView"
+                }
+              }
+            }
           },
           "400": {
             "description": "invalid_proxy_headers",
@@ -73987,6 +74133,88 @@
           }
         }
       },
+      "List_PublicView": {
+        "type": "object",
+        "required": [
+          "items",
+          "next_cursor"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "description": "A saved task view. Its filter stays in Orbit: list its tasks with `GET /tasks?view_id=`.",
+              "required": [
+                "id",
+                "name",
+                "description",
+                "icon",
+                "color",
+                "visibility",
+                "is_favorite",
+                "favorite_position",
+                "version",
+                "updated_at"
+              ],
+              "properties": {
+                "color": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "description": "`#rrggbb`."
+                },
+                "description": {
+                  "type": "string"
+                },
+                "favorite_position": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "format": "int64",
+                  "description": "The view's place in the creator's favorites; `null` when not a favorite."
+                },
+                "icon": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "id": {
+                  "type": "string"
+                },
+                "is_favorite": {
+                  "type": "boolean",
+                  "description": "Whether the token's creator has favorited this view."
+                },
+                "name": {
+                  "type": "string"
+                },
+                "updated_at": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "version": {
+                  "type": "integer",
+                  "format": "int64"
+                },
+                "visibility": {
+                  "$ref": "#/components/schemas/Visibility"
+                }
+              }
+            }
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Send it as `cursor` for the next page; `null` on the last page."
+          }
+        }
+      },
       "List_TaskRelationRecord": {
         "type": "object",
         "required": [
@@ -81969,7 +82197,7 @@
             "items": {
               "$ref": "#/components/schemas/PublicWorkspaceGrant"
             },
-            "description": "Every workspace the token may use, with its access there. Always one item today."
+            "description": "Every workspace the token may use, with its access there. An API token has one; an OAuth\nconnection can have several."
           }
         }
       },
@@ -82889,6 +83117,69 @@
           },
           "id": {
             "type": "string"
+          }
+        }
+      },
+      "PublicView": {
+        "type": "object",
+        "description": "A saved task view. Its filter stays in Orbit: list its tasks with `GET /tasks?view_id=`.",
+        "required": [
+          "id",
+          "name",
+          "description",
+          "icon",
+          "color",
+          "visibility",
+          "is_favorite",
+          "favorite_position",
+          "version",
+          "updated_at"
+        ],
+        "properties": {
+          "color": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`#rrggbb`."
+          },
+          "description": {
+            "type": "string"
+          },
+          "favorite_position": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "The view's place in the creator's favorites; `null` when not a favorite."
+          },
+          "icon": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "is_favorite": {
+            "type": "boolean",
+            "description": "Whether the token's creator has favorited this view."
+          },
+          "name": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "version": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "visibility": {
+            "$ref": "#/components/schemas/Visibility"
           }
         }
       },

@@ -30,6 +30,7 @@ use crate::repositories::tasks::{
     CommentRecord, ImportedComment, ImportedTask, LabelRecord, MilestoneRecord, ProjectRecord,
     SortOrder, StatusRecord, TaskError, TaskRepository, TaskSort,
 };
+use crate::repositories::views::{SavedViewRecord, Visibility};
 use crate::token_api::{
     AssigneeFilter, CommentImport, CycleRelative, CycleView, DOC_TOO_LARGE_DETAIL, DocMove,
     DocPatch, DocVersionView, DocView, Me, MemberView, MovedDocView, Named, NewComment, NewDoc,
@@ -104,6 +105,7 @@ pub fn router(state: PublicApiState) -> Router {
         .route("/projects/{project_id}/milestones", get(milestones))
         .route("/projects/{project_id}/cycles", get(cycles))
         .route("/members", get(members))
+        .route("/views", get(views))
         .route(
             "/tasks",
             get(list_tasks)
@@ -764,6 +766,47 @@ impl From<MilestoneRecord> for MilestoneOut {
     }
 }
 
+/// A saved task view. Its filter stays in Orbit: list its tasks with `GET /tasks?view_id=`.
+#[derive(Serialize, ToSchema)]
+#[schema(as = PublicView)]
+struct ViewOut {
+    #[schema(value_type = String)]
+    id: Id,
+    name: String,
+    description: String,
+    #[schema(required = true)]
+    icon: Option<String>,
+    /// `#rrggbb`.
+    #[schema(required = true)]
+    color: Option<String>,
+    visibility: Visibility,
+    /// Whether the token's creator has favorited this view.
+    is_favorite: bool,
+    /// The view's place in the creator's favorites; `null` when not a favorite.
+    #[schema(required = true)]
+    favorite_position: Option<i64>,
+    version: i64,
+    #[schema(value_type = String, format = DateTime)]
+    updated_at: TimestampMillis,
+}
+
+impl From<SavedViewRecord> for ViewOut {
+    fn from(v: SavedViewRecord) -> Self {
+        Self {
+            id: v.id,
+            name: v.name,
+            description: v.description,
+            icon: v.icon,
+            color: v.color,
+            visibility: v.visibility,
+            is_favorite: v.is_favorite,
+            favorite_position: v.favorite_position,
+            version: v.version,
+            updated_at: v.updated_at,
+        }
+    }
+}
+
 #[derive(Serialize, ToSchema)]
 #[schema(as = PublicCycle)]
 struct CycleOut {
@@ -914,6 +957,10 @@ struct TasksQuery {
     /// Only the direct sub-issues of this task (a UUID or an identifier such as `ENG-12`), which
     /// must be in an approved project.
     parent_task_id: Option<String>,
+    /// Only the tasks of this saved view (from `GET /views`), with its completed-task and
+    /// sub-issue rules. Without `sort`, the view's order applies.
+    #[param(value_type = Option<String>)]
+    view_id: Option<Id>,
     /// Text in the title or description, or a task identifier; up to 500 characters.
     q: Option<String>,
     /// The `next_cursor` of the previous page. Keep the other parameters the same.
@@ -1436,6 +1483,30 @@ async fn members(
 
 #[utoipa::path(
     get,
+    path = "/api/public/v1/workspaces/{workspace_id}/views",
+    operation_id = "public_list_views",
+    tag = "public-api",
+    summary = "The saved task views of the token's creator",
+    description = "The views the token's creator sees in Orbit: their personal views and the workspace views, by name. A service-account token gets `404`. List a view's tasks with `GET /tasks?view_id=`.",
+    params(("workspace_id" = String, Path, description = "The token's workspace, from `GET /me`.")),
+    responses((status = 200, description = "Every view; `next_cursor` is `null`", body = List<ViewOut>)),
+    security(("bearerAuth" = []))
+)]
+async fn views(State(s): State<PublicApiState>, ctx: Ctx) -> Response {
+    let result = async {
+        let api = s
+            .api
+            .authorize(&ctx.principal, ApiTokenScope::TasksRead, &ctx.request_id)
+            .await?;
+        let items = api.saved_views().await?;
+        Ok(list::<_, ViewOut>(items, None))
+    }
+    .await;
+    ctx.reply(StatusCode::OK, result)
+}
+
+#[utoipa::path(
+    get,
     path = "/api/public/v1/workspaces/{workspace_id}/tasks",
     operation_id = "public_list_tasks",
     tag = "public-api",
@@ -1523,7 +1594,9 @@ async fn list_tasks(
             parent_task_id: api
                 .optional_task_id(query.parent_task_id.as_deref())
                 .await?,
-            sort: Some((sort, order)),
+            view_id: query.view_id,
+            // A view keeps its own order unless the request sets `sort`.
+            sort: (query.sort.is_some() || query.view_id.is_none()).then_some((sort, order)),
             cursor: query.cursor,
             limit: query.limit,
         })

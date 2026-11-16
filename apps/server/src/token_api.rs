@@ -28,7 +28,7 @@ use crate::repositories::pages::{
     SpaceRequest, revision,
 };
 use crate::repositories::task_filter::{
-    Condition, FilterField, FilterGroup, FilterNode, FilterOperator, GroupOp, ShowCompleted,
+    self, Condition, FilterField, FilterGroup, FilterNode, FilterOperator, GroupOp, ShowCompleted,
     SubIssuesDisplay,
 };
 use crate::repositories::task_recurrences::TaskRecurrence;
@@ -38,6 +38,7 @@ use crate::repositories::tasks::{
     TaskError, TaskFilter, TaskRecord, TaskRepository, TaskSort, TaskUpdate, TokenActor,
     normalize_project_key, parse_task_identifier,
 };
+use crate::repositories::views::{SavedViewRecord, ViewRepository};
 use crate::repositories::workspaces::{WorkspaceError, WorkspaceRepository};
 use crate::task_import::escape_markdown;
 use orbit_domain::Permission;
@@ -332,6 +333,8 @@ pub struct TaskQuery {
     pub has_due_date: Option<bool>,
     /// Only the direct sub-issues of this task, which must be in an approved project.
     pub parent_task_id: Option<Id>,
+    /// Only the tasks of this saved view, ordered as the view orders them unless `sort` is set.
+    pub view_id: Option<Id>,
     /// Newest first when unset.
     pub sort: Option<(TaskSort, SortOrder)>,
     pub cursor: Option<String>,
@@ -1008,10 +1011,17 @@ impl Authorized<'_> {
 
     pub async fn list_tasks(&self, query: TaskQuery) -> Result<Page<TaskView>> {
         self.need(ApiTokenScope::TasksRead)?;
-        let (sort, order) = query
-            .sort
-            .clone()
-            .unwrap_or((TaskSort::CreatedAt, SortOrder::Desc));
+        let view = match query.view_id {
+            Some(id) => Some(self.saved_view_state(id).await?),
+            None => None,
+        };
+        let (sort, order) = query.sort.clone().unwrap_or_else(|| match &view {
+            Some(state) => crate::task_routes::task_order(
+                state.display.order_by,
+                state.display.order_direction,
+            ),
+            None => (TaskSort::CreatedAt, SortOrder::Desc),
+        });
         let limit = query.limit.unwrap_or(50);
         if !(1..=100).contains(&limit)
             || query
@@ -1155,16 +1165,26 @@ impl Authorized<'_> {
                 json!({ "instant": after.as_millis() }),
             ));
         }
+        let tree = FilterGroup {
+            op: GroupOp::And,
+            children,
+        };
+        // A view adds its filter and its completed-task and sub-issue rules, as in the web app.
+        let (tree, show_completed, sub_issues) = match view {
+            Some(state) => (
+                task_filter::and_groups(vec![tree, state.filter]),
+                state.display.show_completed,
+                state.display.sub_issues,
+            ),
+            None => (tree, ShowCompleted::All, SubIssuesDisplay::Flat),
+        };
         let filter = TaskFilter {
-            tree: FilterGroup {
-                op: GroupOp::And,
-                children,
-            },
-            show_completed: ShowCompleted::All,
+            tree,
+            show_completed,
             sort: sort.clone(),
             order: order.clone(),
             parent_task_id: query.parent_task_id,
-            sub_issues: SubIssuesDisplay::Flat,
+            sub_issues,
         };
         let p = self.principal;
         let page = self
@@ -1183,6 +1203,33 @@ impl Authorized<'_> {
             items: self.views(page.items).await?,
             next_cursor: page.next_cursor,
         })
+    }
+
+    /// The saved task views the token's creator can see: their personal views and the workspace
+    /// views. Views belong to a person, so they need a personal token, as docs and chat do.
+    pub async fn saved_views(&self) -> Result<Vec<SavedViewRecord>> {
+        self.need(ApiTokenScope::TasksRead)?;
+        if self.principal.service_account.is_some() {
+            return Err(TokenApiError::NotAvailable);
+        }
+        let p = self.principal;
+        Ok(ViewRepository::new(self.api.tasks.database().clone())
+            .list_views(p.workspace_id, p.actor_id)
+            .await?)
+    }
+
+    /// The filter and display rules of a view that [`Self::saved_views`] lists.
+    async fn saved_view_state(&self, view_id: Id) -> Result<task_filter::ViewState> {
+        if self.principal.service_account.is_some() {
+            return Err(TokenApiError::NotAvailable);
+        }
+        let p = self.principal;
+        let view = ViewRepository::new(self.api.tasks.database().clone())
+            .get_view(p.workspace_id, p.actor_id, view_id)
+            .await?;
+        view.state.ok_or(TokenApiError::Invalid(
+            "The view's filter cannot be read. Open the view in Orbit and save it again.",
+        ))
     }
 
     pub async fn get_task(&self, task_ref: &str) -> Result<TaskView> {
